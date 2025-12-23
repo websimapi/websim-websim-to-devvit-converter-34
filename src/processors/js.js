@@ -14,6 +14,20 @@ export function processJS(jsContent, filename = 'script.js', analyzer) {
     }
     
     // Generic WebSim URL Replacements (Fix CSP issues & Hot-swap Identity)
+    // 1. Regex Replacements for Code (handles JSX/Template Literals where AST might fail)
+    
+    // Pattern A: Template Literals: `https://images.websim.ai/avatar/${user.username}`
+    // Captures simple property access inside the template
+    code = code.replace(/`https:\/\/images\.websim\.(?:ai|com)\/avatar\/\$\{([\w\.]+)\}`/g, (match, expr) => {
+        return `\`\${(${expr}.avatar_url || "https://www.redditstatic.com/avatars/avatar_default_02_FF4500.png")}\``;
+    });
+
+    // Pattern B: Concatenation: "https://images.websim.ai/avatar/" + user.username
+    code = code.replace(/["']https:\/\/images\.websim\.(?:ai|com)\/avatar\/["']\s*\+\s*([\w\.]+)/g, (match, expr) => {
+        return `(${expr}.avatar_url || "https://www.redditstatic.com/avatars/avatar_default_02_FF4500.png")`;
+    });
+
+    // 2. Global Fallback for any remaining/unmatched URLs (e.g. static strings or unhandled constructs)
     code = code.replace(/https:\/\/images\.websim\.ai\/avatar\/|https:\/\/images\.websim\.com\/avatar\//g, 'https://www.redditstatic.com/avatars/avatar_default_02_FF4500.png?user=');
     // Replace full literal avatar strings if found
     code = code.replace(/["']https:\/\/images\.websim\.(ai|com)\/avatar\/[^"']+["']/g, '"https://www.redditstatic.com/avatars/avatar_default_02_FF4500.png"');
@@ -76,62 +90,7 @@ export function processJS(jsContent, filename = 'script.js', analyzer) {
                 }
             },
             Literal: rewritePaths,
-            BinaryExpression: (node) => {
-                // Detect concatenation: "https://images.websim.ai/avatar/" + user.username
-                if (node.operator === '+') {
-                    const left = node.left;
-                    const right = node.right;
-                    
-                    if (left.type === 'Literal' && typeof left.value === 'string') {
-                        // Check if string ends with one of the avatar prefixes
-                        const match = left.value.match(/(https:\/\/images\.websim\.(?:ai|com)\/avatar\/|https:\/\/www\.redditstatic\.com\/avatars\/avatar_default_02_FF4500\.png\?user=)$/);
-                        
-                        if (match && right.type === 'MemberExpression' && right.property.name === 'username') {
-                            // Safe Replacement: 
-                            // 1. Trim the URL from the left string (preserving any HTML before it)
-                            const newLeftVal = left.value.substring(0, left.value.length - match[0].length);
-                            magic.overwrite(left.start, left.end, JSON.stringify(newLeftVal));
-                            
-                            // 2. Replace the username access with avatar_url access (with fallback)
-                            const objectCode = code.slice(right.object.start, right.object.end);
-                            const newRightVal = `(${objectCode}.avatar_url || "https://www.redditstatic.com/avatars/avatar_default_02_FF4500.png")`;
-                            magic.overwrite(right.start, right.end, newRightVal);
-                            
-                            hasChanges = true;
-                        }
-                    }
-                }
-            },
-            TemplateLiteral: (node) => {
-                // Iterate through all expressions in the template literal to find avatar injections
-                // e.g. `<img src="https://images.websim.com/avatar/${user.username}">`
-                
-                node.expressions.forEach((expr, i) => {
-                    const quasi = node.quasis[i]; // The string part BEFORE the expression
-                    const raw = quasi.value.raw;
-                    
-                    // Check if this segment ends with an avatar URL prefix
-                    const match = raw.match(/(https:\/\/images\.websim\.(?:ai|com)\/avatar\/|https:\/\/www\.redditstatic\.com\/avatars\/avatar_default_02_FF4500\.png\?user=)$/);
-                    
-                    if (match) {
-                        // Check if expression is accessing a 'username' property
-                        if (expr.type === 'MemberExpression' && expr.property.type === 'Identifier' && expr.property.name === 'username') {
-                            // 1. Remove the URL prefix from the quasi string
-                            const prefixLen = match[0].length;
-                            // We construct the new raw string without the prefix
-                            const newRaw = raw.substring(0, raw.length - prefixLen);
-                            magic.overwrite(quasi.start, quasi.end, newRaw);
 
-                            // 2. Replace the expression `user.username` with `user.avatar_url`
-                            const objectCode = code.slice(expr.object.start, expr.object.end);
-                            const replacement = `(${objectCode}.avatar_url || "https://www.redditstatic.com/avatars/avatar_default_02_FF4500.png")`;
-                            magic.overwrite(expr.start, expr.end, replacement);
-                            
-                            hasChanges = true;
-                        }
-                    }
-                });
-            }
         });
 
     } catch (e) {

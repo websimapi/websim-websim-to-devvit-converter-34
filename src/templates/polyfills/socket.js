@@ -175,10 +175,14 @@ export const websimSocketPolyfill = `
             
             // Enforce Reddit Identity on content creation
             const enhancedData = { ...data };
+            const defaultAvatar = 'https://www.redditstatic.com/avatars/avatar_default_02_FF4500.png';
+
             if (window._currentUser) {
                 enhancedData.username = window._currentUser.username;
-                enhancedData.avatar_url = window._currentUser.avatar_url;
+                enhancedData.avatar_url = window._currentUser.avatar_url || defaultAvatar;
                 enhancedData.user_id = window._currentUser.id;
+            } else {
+                if (!enhancedData.avatar_url) enhancedData.avatar_url = defaultAvatar;
             }
 
             const record = { 
